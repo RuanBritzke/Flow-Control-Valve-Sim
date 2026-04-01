@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QBrush, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsPixmapItem,
@@ -27,10 +28,23 @@ from hydraulics import ValveState
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
 MANIFOLD_ASSETS = {
-    ("open", "open"): "BlockAndBleed-open-open.png",
-    ("open", "close"): "BlockAndBleed-open-close.png",
-    ("close", "open"): "BlockAndBleed-close-open.png",
-    ("close", "close"): "BlockAndBleed-close-close.png",
+    ("open", "open"): "BlockAndBleed-open-open.svg",
+    ("open", "close"): "BlockAndBleed-open-close.svg",
+    ("close", "open"): "BlockAndBleed-close-open.svg",
+    ("close", "close"): "BlockAndBleed-close-close.svg",
+}
+
+VALVE_ASSETS = {
+    "Fully Closed": "TRFC_FC.svg",
+    "Fully Open": "TRFC_FO.svg",
+    "1": "TRFC_P1.svg",
+    "2": "TRFC_P2.svg",
+    "3": "TRFC_P3.svg",
+    "4": "TRFC_P4.svg",
+    "5": "TRFC_P5.svg",
+    "6": "TRFC_P6.svg",
+    "7": "TRFC_P7.svg",
+    "8": "TRFC_P8.svg",
 }
 
 
@@ -42,13 +56,13 @@ class ClickableRectItem(QGraphicsRectItem):
         w: float,
         h: float,
         callback,
-        pen: QPen,
-        brush: QBrush,
+        pen: QPen | None = None,
+        brush: QBrush | None = None,
     ) -> None:
         super().__init__(x, y, w, h)
         self.callback = callback
-        self.setPen(pen)
-        self.setBrush(brush)
+        self.setPen(pen if pen is not None else QPen(Qt.PenStyle.NoPen))
+        self.setBrush(brush if brush is not None else QBrush(Qt.BrushStyle.NoBrush))
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -100,24 +114,27 @@ class GraphicsView(QGraphicsView):
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.setStyleSheet("background: white;")
 
 
 class ValveSimulatorUI(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Hydraulic Valve Simulator")
-        self.resize(1300, 900)
+        self.resize(1500, 900)
 
         self.sim = ValveSimulator()
 
         self.status_label = QLabel("Ready")
+        self.scene = QGraphicsScene(self)
+        self.scene.setBackgroundBrush(QBrush(QColor("white")))
+        self.view = GraphicsView(self.scene)
+
         self.pixmap_cache: dict[tuple[str, int, int], QPixmap] = {}
 
         self.common_close_returns = 0
         self.open_returns: list[int] = [0 for _ in self.sim.valves]
-
-        self.scene = QGraphicsScene(self)
-        self.view = GraphicsView(self.scene)
+        self.last_move_message = "No valve movement"
 
         self._build_ui()
         self.redraw()
@@ -136,7 +153,11 @@ class ValveSimulatorUI(QMainWindow):
         add_valve_btn = QPushButton("Add Valve")
         add_valve_btn.clicked.connect(self.add_valve)
 
+        reset_btn = QPushButton("Reset")
+        reset_btn.clicked.connect(self.reset_simulator)
+
         top_bar.addWidget(add_valve_btn)
+        top_bar.addWidget(reset_btn)
         top_bar.addWidget(self.status_label)
         top_bar.addStretch()
 
@@ -147,12 +168,24 @@ class ValveSimulatorUI(QMainWindow):
         self.sim.add_valve()
         self.open_returns.append(0)
         self.status_label.setText(f"FCV-{len(self.sim.valves)} added")
+        self.last_move_message = "No valve movement"
+        self.redraw()
+
+    def reset_simulator(self) -> None:
+        self.sim.reset()
+        self.common_close_returns = 0
+        self.open_returns = [0 for _ in self.sim.valves]
+        self.last_move_message = "No valve movement"
+        self.status_label.setText("Simulator reset")
         self.redraw()
 
     def actuate(self) -> None:
         results = self.sim.actuate()
 
         moved: list[str] = []
+        self.common_close_returns = 0
+        self.open_returns = [0 for _ in self.sim.valves]
+
         for i, result in enumerate(results, start=1):
             if result.movement:
                 moved.append(f"FCV-{i}")
@@ -165,174 +198,174 @@ class ValveSimulatorUI(QMainWindow):
                     self.open_returns[j] = result.fluid_returns or 0
                     break
 
-        self.status_label.setText(
+        self.last_move_message = (
             "Moved: " + ", ".join(moved) if moved else "No valve movement"
         )
+        self.status_label.setText(self.last_move_message)
         self.redraw()
 
     def redraw(self) -> None:
         self.scene.clear()
+        self.scene.setBackgroundBrush(QBrush(QColor("white")))
 
-        top_y = 110
-        left_x = 70
-        trunk_x = 250
-        manifold_x = 300
-        fcv_x = 1080
-        row_h = 170
+        margin_x = 40
+        header_y = 30
+        top_y = 90
+        row_gap = 30
 
-        scene_height = max(900, top_y + row_h * (len(self.sim.valves) + 2))
-        self.scene.setSceneRect(0, 0, 1400, scene_height)
+        col1_x = margin_x
+        col2_x = 260
+        col3_x = 650
+        col4_x = 900
 
-        self._add_text(40, 35, "Hydraulic Valve Simulator", size=16, bold=True)
+        manifold_w = 260
+        manifold_h = 140
+        valve_w = 180
+        valve_h = 160
 
-        pump_pixmap = self._get_pump_pixmap(width=110, height=70)
-        pump_x = left_x
-        pump_y = top_y - 35
+        row_height = valve_h + row_gap
 
-        self._add_text(pump_x - 10, pump_y - 18, "Pump / Supply", size=10)
+        scene_width = 1350
+        scene_height = max(900, top_y + row_height * max(2, len(self.sim.valves) + 1))
+        self.scene.setSceneRect(0, 0, scene_width, scene_height)
 
+        self._add_text(40, 20, "Hydraulic Valve Simulator", size=16, bold=True)
+
+        self._add_text(col1_x, header_y, "Pump", size=11, bold=True)
+        self._add_text(col2_x, header_y, "Block and Bleed Manifolds", size=11, bold=True)
+        self._add_text(col3_x, header_y, "Valves", size=11, bold=True)
+        self._add_text(col4_x, header_y, "Valve Information", size=11, bold=True)
+
+        message_row_y = top_y
+        common_row_y = top_y + row_height
+
+        # Column 1: pump only
+        pump_pixmap = self._get_pump_pixmap(120, 80)
         pump_item = ClickablePixmapItem(pump_pixmap, self.actuate)
-        pump_item.setPos(pump_x, pump_y)
+        pump_item.setPos(col1_x + 20, common_row_y + 10)
         self.scene.addItem(pump_item)
 
         self.scene.addRect(
-            QRectF(pump_x, pump_y, 110, 70),
+            QRectF(col1_x + 15, common_row_y + 5, 130, 90),
             QPen(QColor("#1f77b4"), 2, Qt.PenStyle.DashLine),
         )
-        self._add_text(
-            pump_x + 8,
-            pump_y + 84,
-            "Click pump to actuate",
-            size=10,
-            color="#1f77b4",
-        )
+        self._add_text(col1_x + 18, common_row_y - 10, "Pump / Supply", size=10)
+        self._add_text(col1_x + 18, common_row_y + 105, "Click pump to actuate", size=10, color="#1f77b4")
 
-        self.scene.addLine(
-            pump_x + 110,
-            top_y,
-            manifold_x,
-            top_y,
-            QPen(Qt.GlobalColor.black, 2),
+        # First row / third column: movement message
+        self.scene.addRect(
+            QRectF(col3_x - 10, message_row_y, 500, valve_h - 20),
+            QPen(QColor("#cccccc"), 1),
+            QBrush(QColor("white")),
         )
+        self._add_text(col3_x, message_row_y + 10, "Valve Movement Messages", size=12, bold=True)
+        self._add_text(col3_x, message_row_y + 45, self.last_move_message, size=11, bold=True, color="#1f77b4")
 
-        last_y = top_y + row_h * max(1, len(self.sim.valves))
-        self.scene.addLine(
-            trunk_x,
-            top_y,
-            trunk_x,
-            last_y,
-            QPen(Qt.GlobalColor.black, 2),
-        )
-
-        self._draw_row(
-            y=top_y,
+        # Common close row
+        self._draw_manifold_panel(
+            x=col2_x,
+            y=common_row_y,
             title="Common Close Line",
             manifold=self.sim.common_close_manifold,
             line_state=self.sim.common_close_line.state.value,
             returns=self.common_close_returns,
-            manifold_x=manifold_x,
-            fcv_x=None,
-            index=None,
             common=True,
+            index=None,
+            width=manifold_w,
+            height=manifold_h,
         )
 
+        # Valve rows
         for i, valve in enumerate(self.sim.valves):
-            y = top_y + row_h * (i + 1)
-            self.scene.addLine(
-                trunk_x,
-                y,
-                manifold_x,
-                y,
-                QPen(Qt.GlobalColor.black, 2),
-            )
+            y = common_row_y + row_height * (i + 1)
 
-            self._draw_row(
+            self._draw_manifold_panel(
+                x=col2_x,
                 y=y,
                 title=f"Open Line {i + 1}",
                 manifold=self.sim.manifolds[i],
                 line_state=self.sim.lines[i].state.value,
                 returns=self.open_returns[i],
-                manifold_x=manifold_x,
-                fcv_x=fcv_x,
-                index=i,
                 common=False,
+                index=i,
+                width=manifold_w,
+                height=manifold_h,
             )
 
-            self._draw_fcv(fcv_x, y, f"FCV-{i + 1}", valve.choke.value)
+            self._draw_valve_svg(
+                x=col3_x,
+                y=y,
+                position=valve.choke.value,
+                width=valve_w,
+                height=valve_h,
+            )
 
-    def _draw_row(
+            self._draw_valve_info(
+                x=col4_x,
+                y=y,
+                valve_number=i + 1,
+                position=valve.choke.value,
+                line_state=self.sim.lines[i].state.value,
+                returns=self.open_returns[i],
+                box_w=280,
+                box_h=120,
+            )
+
+    def _draw_manifold_panel(
         self,
+        x: int,
         y: int,
         title: str,
         manifold,
         line_state: str,
         returns: int,
-        manifold_x: int,
-        fcv_x: int | None,
-        index: int | None,
         common: bool,
+        index: int | None,
+        width: int,
+        height: int,
     ) -> None:
-        pixmap = self._get_manifold_pixmap(manifold, width=240, height=120)
-        img_w = pixmap.width()
+        pixmap = self._get_manifold_pixmap(manifold, width, height)
 
         item = QGraphicsPixmapItem(pixmap)
-        item.setPos(manifold_x, y - 10)
+        item.setPos(x, y)
         self.scene.addItem(item)
 
-        self._add_text(manifold_x + img_w + 10, y + 5, title, size=12)
-        self._add_text(manifold_x + img_w + 10, y + 30, f"Line: {line_state}", size=11)
-        self._add_text(manifold_x + img_w + 10, y + 55, f"Returns: {returns}", size=11)
+        self._add_text(x + width + 20, y + 10, title, size=12, bold=False)
+        self._add_text(x + width + 20, y + 42, f"Line: {line_state}", size=11)
+        self._add_text(x + width + 20, y + 74, f"Returns: {returns}", size=11)
 
-        line_y = y + 45
-        line_start = manifold_x + img_w - 5
-        line_end = (fcv_x - 20) if fcv_x is not None else 1030
-        self._draw_arrow(line_start, line_y, line_end, line_y)
-
-        block_box = (manifold_x + 58, y + 5, 97, 37)
-        bleed_box = (manifold_x + 58, y + 58, 97, 38)
+        block_box = (x + 58, y + 8, 97, 36)
+        bleed_box = (x + 58, y + 58, 97, 36)
 
         green_pen = QPen(QColor("#2ca02c"), 2)
-        green_brush = QBrush(QColor(204, 255, 204, 120))
+        green_brush = QBrush(QColor(204, 255, 204, 70))
 
         red_pen = QPen(QColor("#d62728"), 2)
-        red_brush = QBrush(QColor(255, 214, 214, 120))
+        red_brush = QBrush(QColor(255, 214, 214, 70))
 
         if common:
             block_item = ClickableRectItem(
-                block_box[0],
-                block_box[1],
-                block_box[2],
-                block_box[3],
+                block_box[0], block_box[1], block_box[2], block_box[3],
                 lambda: self.toggle_common("block"),
                 green_pen,
                 green_brush,
             )
             bleed_item = ClickableRectItem(
-                bleed_box[0],
-                bleed_box[1],
-                bleed_box[2],
-                bleed_box[3],
+                bleed_box[0], bleed_box[1], bleed_box[2], bleed_box[3],
                 lambda: self.toggle_common("bleed"),
                 red_pen,
                 red_brush,
             )
         else:
             assert index is not None
-
             block_item = ClickableRectItem(
-                block_box[0],
-                block_box[1],
-                block_box[2],
-                block_box[3],
+                block_box[0], block_box[1], block_box[2], block_box[3],
                 lambda i=index: self.toggle_open(i, "block"),
                 green_pen,
                 green_brush,
             )
             bleed_item = ClickableRectItem(
-                bleed_box[0],
-                bleed_box[1],
-                bleed_box[2],
-                bleed_box[3],
+                bleed_box[0], bleed_box[1], bleed_box[2], bleed_box[3],
                 lambda i=index: self.toggle_open(i, "bleed"),
                 red_pen,
                 red_brush,
@@ -341,39 +374,35 @@ class ValveSimulatorUI(QMainWindow):
         self.scene.addItem(block_item)
         self.scene.addItem(bleed_item)
 
-        self._add_text(
-            block_box[0] + 20,
-            block_box[1] - 16,
-            "BLOCK",
-            size=9,
-            bold=True,
-            color="#2ca02c",
-        )
-        self._add_text(
-            bleed_box[0] + 20,
-            bleed_box[1] - 16,
-            "BLEED",
-            size=9,
-            bold=True,
-            color="#d62728",
-        )
+        self._add_text(block_box[0] + 18, block_box[1] - 16, "BLOCK", size=9, bold=True, color="#2ca02c")
+        self._add_text(bleed_box[0] + 18, bleed_box[1] - 16, "BLEED", size=9, bold=True, color="#d62728")
 
-    def _draw_fcv(self, x: int, y: int, label: str, position: str) -> None:
-        pen = QPen(Qt.GlobalColor.black, 1)
+    def _draw_valve_svg(self, x: int, y: int, position: str, width: int, height: int) -> None:
+        pixmap = self._get_valve_pixmap(position, width, height)
+        item = QGraphicsPixmapItem(pixmap)
+        item.setPos(x, y)
+        self.scene.addItem(item)
 
-        self.scene.addRect(QRectF(x, y + 10, 35, 100), pen)
-        self.scene.addRect(QRectF(x + 8, y + 20, 12, 22), pen)
-        self.scene.addRect(QRectF(x + 8, y + 80, 12, 22), pen)
-
-        self._add_text(x + 45, y + 25, label, size=11)
-
-        # White backing box for the position text to fully cover previous text.
+    def _draw_valve_info(
+        self,
+        x: int,
+        y: int,
+        valve_number: int,
+        position: str,
+        line_state: str,
+        returns: int,
+        box_w: int,
+        box_h: int,
+    ) -> None:
         self.scene.addRect(
-            QRectF(x + 42, y + 46, 170, 24),
-            QPen(Qt.PenStyle.NoPen),
+            QRectF(x, y + 10, box_w, box_h),
+            QPen(QColor("#cccccc"), 1),
             QBrush(QColor("white")),
         )
-        self._add_text(x + 45, y + 50, f"Pos: {position}", size=10)
+        self._add_text(x + 15, y + 22, f"FCV-{valve_number}", size=12, bold=True)
+        self._add_text(x + 15, y + 50, f"Position: {position}", size=11)
+        self._add_text(x + 15, y + 78, f"Open Line: {line_state}", size=11)
+        self._add_text(x + 15, y + 106, f"Returns: {returns}", size=11)
 
     def toggle_common(self, part: str) -> None:
         manifold = self.sim.common_close_manifold
@@ -395,8 +424,47 @@ class ValveSimulatorUI(QMainWindow):
     def _toggle(state: ValveState) -> ValveState:
         return ValveState.CLOSED if state == ValveState.OPEN else ValveState.OPEN
 
-    def _get_pump_pixmap(self, width: int = 110, height: int = 70) -> QPixmap:
+    def _render_svg_to_pixmap(self, path: Path, width: int, height: int) -> QPixmap:
+        key = (str(path), width, height)
+
+        if key not in self.pixmap_cache:
+            if not path.exists():
+                raise FileNotFoundError(f"Could not find SVG asset: {path}")
+
+            renderer = QSvgRenderer(str(path))
+            if not renderer.isValid():
+                raise ValueError(f"Invalid SVG file: {path}")
+
+            pixmap = QPixmap(width, height)
+            pixmap.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            renderer.render(painter, QRectF(0, 0, width, height))
+            painter.end()
+
+            self.pixmap_cache[key] = pixmap
+
+        return self.pixmap_cache[key]
+
+    def _get_manifold_pixmap(self, manifold, width: int, height: int) -> QPixmap:
+        block = "open" if manifold.block == ValveState.OPEN else "close"
+        bleed = "open" if manifold.bleed == ValveState.OPEN else "close"
+        filename = MANIFOLD_ASSETS[(block, bleed)]
+        path = ASSET_DIR / filename
+        return self._render_svg_to_pixmap(path, width, height)
+
+    def _get_valve_pixmap(self, position: str, width: int, height: int) -> QPixmap:
+        filename = VALVE_ASSETS.get(position)
+        if filename is None:
+            raise KeyError(f"No SVG mapping for valve position: {position}")
+        path = ASSET_DIR / filename
+        return self._render_svg_to_pixmap(path, width, height)
+
+    def _get_pump_pixmap(self, width: int, height: int) -> QPixmap:
         key = ("__pump__", width, height)
+
         if key not in self.pixmap_cache:
             pixmap = QPixmap(width, height)
             pixmap.fill(Qt.GlobalColor.transparent)
@@ -405,7 +473,6 @@ class ValveSimulatorUI(QMainWindow):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.setPen(QPen(Qt.GlobalColor.black, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-
             painter.drawEllipse(8, 12, 44, 44)
 
             triangle = QPolygonF(
@@ -421,29 +488,9 @@ class ValveSimulatorUI(QMainWindow):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(Qt.GlobalColor.black, 4))
             painter.drawLine(52, 34, width - 8, 34)
-
             painter.end()
+
             self.pixmap_cache[key] = pixmap
-
-        return self.pixmap_cache[key]
-
-    def _get_manifold_pixmap(self, manifold, width: int = 240, height: int = 120) -> QPixmap:
-        block = "open" if manifold.block == ValveState.OPEN else "close"
-        bleed = "open" if manifold.bleed == ValveState.OPEN else "close"
-        filename = MANIFOLD_ASSETS[(block, bleed)]
-        path = ASSET_DIR / filename
-
-        key = (str(path), width, height)
-        if key not in self.pixmap_cache:
-            pixmap = QPixmap(str(path))
-            if pixmap.isNull():
-                raise FileNotFoundError(f"Could not load manifold image: {path}")
-            self.pixmap_cache[key] = pixmap.scaled(
-                width,
-                height,
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
 
         return self.pixmap_cache[key]
 
@@ -465,23 +512,6 @@ class ValveSimulatorUI(QMainWindow):
         item.setPos(x, y)
         self.scene.addItem(item)
         return item
-
-    def _draw_arrow(self, x1: float, y1: float, x2: float, y2: float) -> None:
-        pen = QPen(Qt.GlobalColor.black, 2)
-        self.scene.addLine(x1, y1, x2, y2, pen)
-
-        arrow_size = 8
-        arrow = QPolygonF(
-            [
-                QPointF(x2, y2),
-                QPointF(x2 - arrow_size, y2 - 4),
-                QPointF(x2 - arrow_size, y2 + 4),
-            ]
-        )
-        arrow_item = QGraphicsPolygonItem(arrow)
-        arrow_item.setPen(pen)
-        arrow_item.setBrush(QBrush(Qt.GlobalColor.black))
-        self.scene.addItem(arrow_item)
 
 
 def main() -> None:
