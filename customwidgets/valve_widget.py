@@ -1,0 +1,2 @@
+class ValveWidget:
+    pass

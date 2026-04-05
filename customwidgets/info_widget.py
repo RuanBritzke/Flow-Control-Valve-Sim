@@ -1,0 +1,2 @@
+class InfoWidget:
+    pass
