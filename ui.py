@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6 import QtGui
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QBrush, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtSvg import QSvgRenderer
@@ -25,8 +26,7 @@ from PySide6.QtWidgets import (
 
 from simulator import ValveSimulator
 from hydraulics import ValveState
-from customwidgets.pump_widget import PumpWidget
-
+from customwidgets import PumpWidget, ManifoldWidget
 
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
@@ -117,28 +117,34 @@ class ValveSimulationUI(QMainWindow):
             self.get_pump_pixmap(200, 200),
             self.actuate
         )
-        self.grid.addWidget(pump_widget, 1, 0, 1, 1)
-        self.grid.addWidget(self.debug_box("[Common Close Line Manifold]"), 1, 1)
+        common_close_widget = ManifoldWidget(
+            self.get_manifold_svg_path(self.sim.common_close_manifold, 200, 200)
+        )
+
+        self.grid.addWidget(pump_widget, 1, 0)
+        self.grid.addWidget(common_close_widget, 1, 1)
         self.grid.addWidget(self.debug_box("[Open Line 1 Manifold]"), 2, 1)
         self.grid.addWidget(QLabel(""), 3, 1)  # Empty cell for valve column
         self.grid.addWidget(self.debug_box("[Movement Messages]"), 1, 3, 1, 1)
         self.grid.addWidget(self.debug_box("[FCV-1]"), 2, 2, 2, 1)
         self.grid.addWidget(self.debug_box("[FCV-1 Info]"), 2, 3, 2, 1)
 
+        add_valve_btn = QPushButton("Add Valve")
+        add_valve_btn.clicked.connect(self.add_valve)
+
         # Multidrop valve blocks
-        for i in range(1, len(self.sim.valves)):
-            # if i == 1:
-            #     # skip first valve since it's already added above
-            #     continue
+        for i in range(len(self.sim.valves)):
             valve = i + 1
-            valverow = 2*(i + 2) 
-            self.grid.addWidget(self.debug_box(f"Open Line {valve} Manifold"), valverow, 1)
+            open_manifold_widget = ManifoldWidget(
+                self.get_manifold_svg_path(self.sim.manifolds[i], 200, 200)
+            )
+            valverow = 2*i
+            self.grid.addWidget(open_manifold_widget, valverow, 1)
             self.grid.addWidget(QLabel(""), valverow + 1, 1) # Empty cell for valve column 
             self.grid.addWidget(self.debug_box(f"FCV-{valve}"), valverow, 2, 2, 1)
             self.grid.addWidget(self.debug_box(f"[FCV-{valve} Info]"), valverow, 3, 2, 1)
-
-        add_valve_btn = QPushButton("Add Valve")
-        add_valve_btn.clicked.connect(self.add_valve)
+    
+        
         self.grid.addWidget(add_valve_btn, 2*(len(self.sim.valves) + 2), 2)
 
     def debug_box(self, text: str) -> QFrame:
@@ -181,10 +187,18 @@ class ValveSimulationUI(QMainWindow):
 
         return self.pixmap_cache[key]
 
+    ### Getters ###
+
     def get_pump_pixmap(self, width: int, height: int) -> QPixmap:
         filename = PUMP_ASSETS["PUMP_NORMAL"]
         path = ASSET_DIR / filename
         return self.render_svg_to_pixmap(path, width, height)
+
+    def get_manifold_svg_path(self, manifold, width: int, height: int) -> Path:
+        block = "open" if manifold.block == ValveState.OPEN else "close"
+        bleed = "open" if manifold.bleed == ValveState.OPEN else "close"
+        filename = MANIFOLD_ASSETS[(block, bleed)]
+        return ASSET_DIR / filename
     
     ### Binds and callbacks ###
     def clear_grid(self) -> None:
